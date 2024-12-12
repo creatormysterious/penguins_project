@@ -1,0 +1,510 @@
+---
+title: "Reproducible Science in R and Figures: Analysis of PalmerPenguins dataset"
+output: 
+    html_document:
+        toc: true
+date: "2024-12-11"
+bibliography: references.bib
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.align = 'center')
+
+#load necessary libraries 
+library(tidyverse)
+library(palmerpenguins)
+library(janitor)
+library(here)
+library(dplyr)
+library(ggplot2)
+library(car) # for performing Levene's test
+library(knitr)
+library(MASS)
+library(kableExtra)
+library(ggsignif)  # For adding significance annotations
+library(svglite)
+
+
+```
+
+### a) Provide your figure here:
+
+```{r bad figure code, echo=FALSE, warning=FALSE}
+
+
+# Create a bad figure that badly communicates the dataset
+# Load necessary libraries
+library(ggplot2)
+
+# Create the scatter plot
+ggplot(penguins, aes(x = bill_length_mm, y = bill_depth_mm, colour = species, shape = species, size = species, alpha = species)) +
+  geom_point() +  
+  labs(
+    title = "bill_depth_mm vs bill_length_mm", 
+    x = "bill_length_mm", 
+    y = "bill_depth_mm"
+  ) +
+  scale_colour_manual(
+    name = NULL,  # Remove the 'species' title from colour legend
+    values = c("Adelie" = "gray70", 
+               "Chinstrap" = "red", 
+               "Gentoo" = "gray80") # Manually specify colour for each species 
+  ) +
+  scale_shape_manual(
+    name = NULL, 
+    values = c("Adelie" = 16,   
+               "Chinstrap" = 16, 
+               "Gentoo" = 15)   # Manually specify shape for each species 
+  ) +
+  scale_alpha_manual(
+    name = NULL,  
+    values = c("Adelie" = 1,    
+               "Chinstrap" = 0.3, 
+               "Gentoo" = 1)     # Manually specify transparency for each species 
+  ) +
+  scale_size_manual(
+    name = NULL,  
+    values = c("Adelie" = 3,  
+               "Chinstrap" = 7, 
+               "Gentoo" = 7)    
+  ) +
+  scale_x_reverse() +  # Reverse the x-axis so larger bill lengths appear on the left
+  coord_fixed(ratio = 10) +  # Aspect ratio of 10:1 (y-axis is 10x taller than x-axis)
+  theme(
+    plot.title = element_text(
+      hjust = 1,               
+      face = "plain",          
+      size = 15,               
+      family = "Brush Script MT",  # Set the title to a cursive script
+      color = "grey"          
+    ),
+    axis.text.y = element_blank(),  # Remove y-axis numbers
+    axis.ticks.y = element_blank(), # Remove y-axis ticks
+    axis.line = element_line(color = "black"), # Ensures axis lines are visible
+    legend.title = element_blank()  # Remove all legend titles (for colour, shape, size, alpha)
+  )
+
+
+
+```
+
+### b) Write about how your design choices mislead the reader about the underlying data (100-300 words).
+
+The text elements of this plot are designed to confuse the viewer. The title is off-centered, a pale grey and cursive which is difficult to read and easily overlooked by the reader. Axes labels reflect the column names and have not been formatted with spaces to make them visually presentable. There is no legend title and it may not be clear to the reader that the key shows three different species of penguin (ambiguity about what the data actually is). The axes layout is designed to be misleading: there are no axes ticks or labels on the y axis so the reader cannot infer quantitative values/the scale for bill depth. Additionally, the X axis scale has been reversed which encourages the reader to draw incorrect conclusions - it appears from this plot that there is a negative correlation between bill length and depth. Colour makes this plot misleading - grey Adelie and Gentoo data points do not stand out from the grey background. Similar monochromatic shades of grey are difficult to distinguish between, especially for colour-blind individuals [@ledolter2020]. Red colour use for Chinstrap adds further confusion by emphasising this species and suggesting it should stand out (when in fact it does not). Scaling choices also mislead the reader - a fixed aspect ratio means the plot is elongated in the vertical direction, giving the impression of data points being clustered close together. Plot points are variable in size (Adelie is smaller) and shape (Gentoo is square) which makes it harder to compare inter-species trends. Overlapping or "stacked" data points can obscure information [@baker2016]. In this plot, points are scaled in such a way that they are overlapping, making any one individual hard to distinguish and it difficult to identify trends or outliers. This is exacerbated by increasing the transparency of Chinstrap datapoints, where overlaid points are impossible to distinguish.
+
+------------------------------------------------------------------------
+
+## QUESTION 2: Data Pipeline
+
+------------------------------------------------------------------------
+
+### Introduction
+
+##### Cleaning the data
+
+```{r Assessment of the data}
+
+
+#confirm correct working directory
+here()
+
+#create folder named databank to store data
+dir.create("databank")
+#preserve raw data by saving as a .csv file in 'databank' named 'penguins_raw'
+write.csv(penguins_raw, "databank/penguins_raw.csv", row.names = FALSE) 
+
+
+#view the raw data. This allows assessment of whether a data cleaning step is needed.
+invisible(head(penguins_raw))
+colnames(penguins_raw)
+#assessment reveals empty rows (adult not sampled) and 'messy' column names (no standardised formatting). I have chosen to display output only for column names here for clarity.
+
+```
+
+```{r Cleaning the data, warning = FALSE}
+
+#create a folder to store functions called 'functions'
+dir.create("functionsbank")
+
+#See contents of this folder for function details. Code is contained in an r file named 'cleaningfunction'. The function is called 'cleaning'. The function cleans column names, removes empty rows and columns, deletes columns with names starting with 'delta' and removes the 'comments' column.
+
+#load the r file named 'cleaningfunction' (which contains the code for cleaning function) into this r markdown file
+source("functionsbank/cleaningfunction.R")
+
+#apply cleaning function to 'penguins_raw' data, and name resulting cleaned dataset 'clean_penguins'
+clean_penguins <- cleaning(penguins_raw)
+
+#verify the data has been cleaned
+colnames(clean_penguins)
+
+#preserve clean data by saving as a .csv file in 'databank' named 'clean_penguins'
+write.csv(clean_penguins, "databank/clean_penguins.csv", row.names = FALSE)
+
+
+
+```
+
+##### Exploring the data
+
+```{r Data Exploration, warning = FALSE, message = FALSE, fig.cap="Figure 1: Violin plot showing the distribution of culmen depth for each penguin species."}
+
+# I am going to be investigating variation in culmen depth between species. 
+
+#create a filtered dataset for culmen_depth by species, remove NAs using a function stored in your 'cleaningfunction' bank
+clean_penguins_filtered_depth <- clean_penguins %>%
+  dplyr::select(species, culmen_depth_mm) %>%
+  remove_NA()
+
+#verify NAs are removed
+print(paste("Number of rows:", nrow(clean_penguins_filtered_depth)))
+print(paste("Number of missing values:", sum(is.na(clean_penguins_filtered_depth))))
+
+#create exploratory plot to display  - violin plot
+
+#setting seed = 0 for true reproducibility
+random_seed = 0
+
+#load the r file named 'create_exploratory_violin_plot' (which contains the code for function to create plot) into this r markdown file
+source("functionsbank/create_exploratory_violin_plot.R")
+
+#create plot using function
+exploratory_violin_plot <- create_exploratory_violin_plot(data = clean_penguins_filtered_depth)
+
+# Display the plot
+exploratory_violin_plot
+
+#create folder to save figures in called 'figures'.
+dir.create("figures")
+
+#load the r file named 'function' (which contains the code for 'save' function) into this r markdown file
+source("functionsbank/savefunction.R")
+
+#use 'save' function to save figure in the 'figures' file as an svg
+save_plot_svg(exploratory_violin_plot, filename = "figures/exploratory_violin_plot.svg", size = 15, scaling = 1)
+
+
+
+```
+
+### Hypothesis
+
+::: hypothesis
+::: {style="border: 2px solid #000; padding-top: 15px; padding-right: 10px; padding-bottom: 2px; padding-left: 10px; background-color: #f9f9f9; border-radius: 5px; text-align: left; font-size: 1.2em;"}
+**H**<sub>0</sub>: There is no significant difference in mean culmen length (mm) between species\
+**H**<sub>A</sub>: At least one species has a mean culmen length (mm) that is significantly different from the others
+:::
+:::
+
+### Statistical Methods
+
+To assess whether there is significant variation in culmen length (mm) between species a linear model will be fitted to the data and a single-factor ANOVA will be carried out.
+
+##### Fitting a linear model and checking assumptions
+
+```{r fitting a linear model}
+
+#fit a linear model for the ANOVA
+linear_model <- lm(culmen_depth_mm ~ species, data = clean_penguins_filtered_depth)
+
+#generate a summary of linear model coefficients - I have chosen not to display the summary output here for clarity.
+linear_model_summary <- summary(linear_model)
+
+
+#Check whether the assumptions of the linear model are met using diagnostic checks
+
+
+#Statistical diagnostic checks:
+
+#Shapiro-Wilk test for normality of residuals
+shapiro_result <- shapiro.test(residuals(linear_model))
+
+#Levene's test for homoscedasticity
+levene_result <- leveneTest(culmen_depth_mm ~ as.factor(species), data = clean_penguins_filtered_depth)
+
+print(shapiro_result)
+print(levene_result)
+#Levene's statistic shows that the assumption of homoscedasticity holds for the raw data
+#However, Shapiro-Wilk statistic shows the assumption of normality is violated for the raw data: a transformation is required 
+
+
+
+
+```
+
+The output of Shapiro-Wilk shows that the assumption of normality is violated. A Box-Cox transformation must be applied
+
+##### Transforming the data and re-fitting the linear model
+
+```{r Boxcox transformation, include=FALSE}
+
+# Apply a Box-Cox transformation to the data so the linear model assumption of normality of residuals is met. This function generates an optimal value of lambda to transform the data.
+
+MASS::boxcox(linear_model)  
+
+# Extract the optimal lambda (λ) from the boxcox result
+lambda <- MASS::boxcox(linear_model)$x[which.max(MASS::boxcox(linear_model)$y)]
+
+# Apply the Box-Cox transformation to the response variable (culmen_depth_mm) based on the optimal lambda
+clean_penguins_filtered_depth$transformed_Depth <- (clean_penguins_filtered_depth$culmen_depth_mm^lambda - 1) / lambda 
+
+# Fit a new linear model using the transformed response variable (transformed_Depth)
+linear_model_transformed_depth <- lm(transformed_Depth ~ species, data = clean_penguins_filtered_depth)
+
+
+
+```
+
+```{r Displaying linear model coefficients for transformed data, warning = FALSE}
+#generate table displaying summary of linear model coefficients for transformed data
+coefficients_table <- as.data.frame(summary(linear_model_transformed_depth)$coefficients)
+
+#Rename columns for clarity
+colnames(coefficients_table) <- c("Estimate", "Std. Error", "t-value", "p-value")
+
+# Format table using kable function
+kable(coefficients_table, 
+      caption = '<div style="text-align:center; color:#777777;">Table 1: Summary of linear model coefficients after transformation</div>', 
+      digits = 3, 
+      align = c('c', 'c', 'c', 'c')) %>%
+  kable_styling(position = "center", latex_options = "HOLD_position")
+
+
+```
+
+##### Checking assumptions for re-fitted linear model with transformed data
+
+```{r visual diagnostic checks, fig.cap="Figure 2: Diagnostic plots to assess the assumptions of the linear model."}
+
+# Visual plots to check for normality of residuals
+
+# Set up layout for multi-panel figure (2x2 grid)
+par(mfrow = c(2, 2), 
+    mar = c(4, 4, 2, 1),  # Standard margins
+    oma = c(4, 0, 0, 0),  # Space for caption (bottom, left, top, right)
+    plt = c(0.2, 0.9, 0.3, 0.85),  # Makes plot region taller (left, right, bottom, top)
+    cex.lab = 0.9,        # Axis label font size
+    cex.axis = 0.9)       # Tick mark font size
+
+# Q-Q plot 
+qqnorm(residuals(linear_model_transformed_depth), 
+       main = "Q-Q Plot of Residuals", 
+       xlab = "Theoretical Quantiles", 
+       ylab = "Sample Quantiles", 
+       cex.main = 1.0)  
+qqline(residuals(linear_model_transformed_depth), col = "red", lwd = 2) 
+
+# Histogram of residuals 
+hist(residuals(linear_model_transformed_depth), 
+     breaks = 20, 
+     main = "Histogram of Residuals", 
+     xlab = "Residuals", 
+     cex.main = 1.0, 
+     cex.lab = 0.9, 
+     cex.axis = 0.9)
+
+# Residuals vs Fitted plot 
+plot(fitted(linear_model_transformed_depth), residuals(linear_model_transformed_depth), 
+     main = "Residuals vs Fitted Plot", 
+     xlab = "Fitted Values", 
+     ylab = "Residuals", 
+     cex.main = 1.0, 
+     cex.lab = 0.9, 
+     cex.axis = 0.9)
+abline(h = 0, col = "red", lwd = 2) 
+
+# Reset the par() layout to avoid affecting future plots
+par(mfrow = c(1, 1))  # Reset to single plot layout
+
+
+```
+
+```{r, statistical diagnostic checks}
+
+
+#Levene's test for homoscedasticity
+levene_result_transformed <- leveneTest(transformed_Depth ~ as.factor(species), data = clean_penguins_filtered_depth)
+
+
+#Shapiro-Wilk test for normality of residuals
+shapiro_result_transformed2 <- shapiro.test(residuals(linear_model_transformed_depth))
+
+
+
+#produce table displaying output of diagnostic tests
+
+# Extract relevant information from Shapiro-Wilk test
+shapiro_table <- data.frame(
+  Test = "Shapiro-Wilk",
+  Statistic = round(shapiro_result_transformed2$statistic, 3),
+  P_Value = formatC(shapiro_result_transformed2$p.value, format = "f", digits = 3)  # Temporarily name the column P_Value
+)
+
+# Rename the columns explicitly
+colnames(shapiro_table) <- c("Test", "Statistic", "P-Value")
+
+# Extract relevant information from Levene's test
+levene_table <- data.frame(
+  Test = "Levene's Test",
+  Statistic = round(levene_result_transformed$`F value`[1], 3),
+  P_Value = formatC(levene_result_transformed$`Pr(>F)`[1], format = "f", digits = 3)  # Temporarily name the column P_Value
+)
+
+# Rename the columns explicitly
+colnames(levene_table) <- c("Test", "Statistic", "P-Value")
+
+# Combine both test results into one table
+combined_table <- rbind(shapiro_table, levene_table)
+
+# Remove row names to avoid the "W" and "1" column
+rownames(combined_table) <- NULL
+
+# Create a clean, presentable table using kable
+kable(combined_table, 
+      caption = '<div style="text-align:center; color:#777777;">Table 2: Summary of Shapiro-Wilk Test for Normality and Levene\'s Test for Homoscedasticity</div>', 
+      align = c('l', 'c', 'c')) %>%
+  kable_styling(
+    position = "center", 
+    latex_options = "HOLD_position"
+  )
+
+
+
+```
+
+##### Statistical test: performing the ANOVA on the re-fitted linear model with transformed data
+
+```{r Statistical test}
+
+#perform the ANOVA test
+ANOVA_test <- aov(linear_model_transformed_depth)
+
+
+
+
+```
+
+### Results & Discussion
+
+##### Results of the ANOVA
+
+```{r Summary table of ANOVA results}
+#display results of the ANOVA test in a summary table
+
+# Extract the summary of the ANOVA test
+anova_summary <- summary(ANOVA_test)
+
+# Convert the summary into a data frame
+anova_table <- as.data.frame(anova_summary[[1]])
+
+# Optionally, round the numeric columns for clarity
+anova_table$`Sum Sq` <- round(anova_table$`Sum Sq`, 3)
+anova_table$`Mean Sq` <- round(anova_table$`Mean Sq`, 3)
+anova_table$`F value` <- round(anova_table$`F value`, 3)
+anova_table$`Pr(>F)` <- formatC(anova_table$`Pr(>F)`, format = "f", digits = 3)
+
+# Now you can create a table using kable
+kable(anova_table, 
+      caption = '<div style="text-align:center; color:#777777;">Table 3: ANOVA Results for Linear Model</div>', 
+      align = c('c', 'c', 'c', 'c', 'c')) %>%
+  kable_styling(position = "center", latex_options = "HOLD_position")
+```
+
+```{r Plotting results, warning = FALSE, message = FALSE, fig.cap="Figure 3: Boxplot of culmen depth across penguin species."}
+
+#load the r file named 'create_results_box_plot' (which contains the code for function to create plot) into this r markdown file
+source("functionsbank/create_results_box_plot.R")
+
+# create results plot using function
+results_box_plot <- create_box_plot(data = clean_penguins_filtered_depth)
+
+# Display the plot
+results_box_plot
+
+
+# Use 'save' function to save figure in the 'figures' file as an svg
+save_plot_svg(results_box_plot, filename = "figures/results_box_plot.svg", size = 15, scaling = 1)
+
+
+
+```
+
+##### Post-hoc analysis: Tukey's test for pairwise differences 
+
+```{r Post hoc analysis, echo=TRUE, results='asis'}
+# Perform the Tukey HSD test
+tukey_results <- TukeyHSD(ANOVA_test)
+
+
+# Extract Tukey results for species
+tukey_species <- as.data.frame(tukey_results$species)
+
+# Add comparison names as a new column (not as row names)
+tukey_species$Comparison <- rownames(tukey_species)
+
+# Reset rownames to prevent duplication in the kable() output
+rownames(tukey_species) <- NULL
+
+# Reorder columns to ensure "Comparison" is the first column
+tukey_table <- tukey_species[, c("Comparison", "diff", "p adj")]
+
+# Rename columns for clarity
+colnames(tukey_table) <- c("Comparison", "Mean Difference", "P-Value")
+
+# Round the numeric columns to 3 decimal places for clarity
+tukey_table$`Mean Difference` <- round(tukey_table$`Mean Difference`, 3)
+
+# Format P-Values as decimal notation with 3 significant figures
+tukey_table$`P-Value` <- formatC(tukey_table$`P-Value`, format = "f", digits = 3)
+
+# Create a clean table using kable()
+kable(
+  tukey_table, 
+  caption = '<div style="text-align:center; color:#777777;">Table 4: Tukey HSD Results for Species Pairwise Comparisons (Mean Difference and P-Values Only)</div>', 
+  align = c('l', 'c', 'c'),
+  booktabs = TRUE
+) %>%
+  kable_styling(
+    position = "center", 
+    latex_options = "HOLD_position"
+  )
+```
+
+### Conclusion
+
+------------------------------------------------------------------------
+
+
+## QUESTION 3: Open Science
+
+**a) GitHub**\
+*GitHub link:* 
+
+**b) Partner's GitHub**\
+*Partner's GitHub link:* 
+
+
+*You **must** provide this so I can verify there is no plagiarism between you and your partner.*
+
+### c) Reflect on your experience running their code. (300-500 words)
+
+-   *What elements of your partner's code helped you to understand and run their data pipeline?*
+
+-   *Did it run? Did you need to fix anything?*
+
+-   *What suggestions would you make for improving their code to make it more understandable or reproducible, and why?*
+
+-   *If you needed to alter your partner's figure using their code, do you think that would be easy or difficult, and why?*
+
+### d) Reflect on your own code based on your experience with your partner's code and their review of yours. (300-500 words)
+
+-   *What improvements did they suggest, and do you agree?*
+
+-   *What did you learn about writing code for other people?*
+
+### e) What are the main barriers for scientists to share their data and code, and what could be done to overcome them? (500-700 words)
+
+- Maitner et al. Code sharing increases citations, but remains uncommon. https://doi.org/10.21203/rs.3.rs-3222221/v1
+- Trisovic et al. A large-scale study on research code quality and execution. https://rdcu.be/dZB7x
+- A Rock-Star Researcher Spun a Web of Lies—and Nearly Got Away with It. https://thewalrus.ca/a-rock-star-researcher-spun-a-web-of-lies-and-nearly-got-away-with-it/
+- Gomes et al. Why don't we share data and code? Perceived barriers and benefits to public archiving practices https://doi.org/10.1098/rspb.2022.1113
